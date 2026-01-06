@@ -1,6 +1,7 @@
 import json
 import re
 import subprocess
+import sys
 
 try:
     import requests
@@ -11,45 +12,23 @@ except ImportError:
     print("[!] Required: requests, getpass, simpleeval")
     exit()
 
-import re
-import base64
-
-def encode_tifinagh_sequences(text):
-    # 1. Define the Regex for the Tifinagh Unicode block (U+2D30 to U+2D7F)
-    # The '+' ensures we grab the whole sequence (word) at once.
-    tifinagh_pattern = r'[\u2D30-\u2D7F]+'
-
-    # 2. Define the replacement callback function
-    def replacer(match):
-        # Get the matched string
-        symbol_sequence = match.group(0)
-        
-        # Convert to bytes (UTF-8)
-        data_bytes = symbol_sequence.encode('utf-8')
-        
-        # Encode to URL-safe Base64
-        # (This uses '-' and '_' instead of '+' and '/')
-        encoded_bytes = base64.urlsafe_b64encode(data_bytes)
-        
-        # Decode back to string to insert into the result
-        final = "a" + encoded_bytes.decode('utf-8')
-        for i in range(0, 9):
-            final = final.replace(str(i), "ABCDEFGHIJ"[i])
-
-        return final.replace('-', '$')
-
-    # 3. Use re.sub to find and replace
-    result = re.sub(tifinagh_pattern, replacer, text)
-    if text != result:
-        print("[!] Warning: Tifinagh variable names detected. Variable names needed to be longer.")
-    return result
+VARIABLE_NAME_REGEX = VNR = r"""[
+    _                       # For hexadecimal and sequential mode
+    a-z                     # For Base62
+    A-Z
+    0-9                     # For Base62
+    \u16A0-\u16FF           # For Runic
+    \u2C00-\u2C5F           # For Glagolitic
+    \U0001E000-\U0001E02F   # Had to use extended sequence to avoid malformed range
+    \u2D30-\u2D7F           # For Tifinagh
+]"""
 
 def unflatten(js_code):
     OFFER = input("\n[*] Want to rename variables and unflatten the control flow? (yes/no) ")
     if OFFER.startswith("y"):
         comments = input("[*] Add comments? (yes/no) ").startswith("y")
     else:
-        print("[!] Cntrol flow may not have been unflattened.")
+        print("[!] Control flow may not have been unflattened.")
         print("[!] Variables have not been renamed.")
         return
 
@@ -61,6 +40,7 @@ def unflatten(js_code):
     USER_INPUT = f"""
 Rename the variables, simplify expressions, and unflatten the control flow of this JavaScript script.
 Wrap the resulting code in a javascript code block.
+Remember to include any simplified expressions directly in the script in place of obfuscated expressions.
 
 ```javascript
 {js_code}
@@ -110,35 +90,16 @@ Wrap the resulting code in a javascript code block.
     print(code)
     
 def simplify(js_code):
-    """
-    1. Simplifies arithmetic (0x1 + 0x2 -> 3).
-    2. Removes redundant parentheses ((10) -> 10).
-    3. Converts bracket notation to dot notation (console['log'] -> console.log).
-    """
-
-    # --- 1. Define Regex Patterns ---
-
     # A. MATH PATTERNS
     # Matches Hex, Octal, Decimal
     num_pattern = r'(?:0[xX][0-9a-fA-F]+|0[oO][0-7]+|0[0-7]*|[1-9]\d*|0)'
     op_pattern = r'(?:>>>|<<|>>|[-+*/%&|^])'
     # Group 1: Left, Group 2: Op, Group 3: Right
     math_regex = re.compile(fr'({num_pattern})\s*({op_pattern})\s*({num_pattern})')
-
-    # B. PARENTHESIS PATTERNS
-    # Matches ( Number )
-    # Lookbehind (?<![\w$]): Ensure not preceded by word char (prevents function calls)
-    # Lookahead (?!\.): Ensure not followed by dot (prevents (5).toString())
     paren_regex = re.compile(fr'(?<![\w$])\(\s*({num_pattern})\s*\)(?!\.)')
 
-    # C. DOT NOTATION PATTERNS
-    # Matches: identifier['property'] or identifier["property"]
-    # Group 1: Object Name (Must be valid JS identifier)
-    # Group 2: Quote type (' or ")
-    # Group 3: Property Name (Must be valid JS identifier to switch to dot notation)
-    # \2: Backreference ensures closing quote matches opening quote
     bracket_to_dot_regex = re.compile(
-        r'([a-zA-Z_$][\w$]*)\s*\[\s*(["\'])([a-zA-Z_$][\w$]*)\2\s*\]'
+        rf'({VNR}[\w$]*)\s*\[\s*(["\'])({VNR}[\w$]*)\2\s*\]'
     )
 
     # --- 2. Helper Functions ---
@@ -217,7 +178,7 @@ def deobfuscate(file):
     except KeyboardInterrupt:
         return
 
-    code = encode_tifinagh_sequences(getFile(file))
+    code = getFile(file)
     property = re.compile('let (.*?);').findall(code)[0]
     print("[*] Attempting to perform dynamic analysis for extracting second layer of obfuscated code...")
     result = executeJS('jsdefender-deobfuscate')
@@ -227,9 +188,9 @@ def deobfuscate(file):
         print(result.stderr)
         return
 
-    layer2 = encode_tifinagh_sequences(result.stdout)
+    layer2 = result.stdout
 
-    found_instances = re.compile(r"function ([a-zA-Z]+)\([a-zA-Z]+\){return ([a-zA-Z]+)\[").findall(layer2)
+    found_instances = re.compile(rf"function ({VNR}+)\({VNR}+\){{return ({VNR}+)\[", flags=re.VERBOSE).findall(layer2)
     found_instances = [i[1] for i in found_instances]
     found_instances_reduced = list(set(found_instances))
     try:
@@ -272,27 +233,52 @@ for (const i in {property}) functions.push(i);
     actual_code = ")}();".join(code.split(")}();")[1:])
 
     obfuscated_indexers = []
+    property_indirection_disabled = False
     for function in functions:
+        # With property indirection enabled
         found_indexers = re.compile(fr"{property}\.{function}\(\d+\)").findall(actual_code)
         obfuscated_indexers.extend(found_indexers)
 
+        # With property indirection disabled
+        found_indexers_2 = re.compile(fr"{property}\.{function}\(\)").findall(actual_code)
+        if len(found_indexers_2) >= len(found_indexers) and not property_indirection_disabled:
+            print("[!] Property indirection appears to have been disabled for this file.")
+            property_indirection_disabled = True
+        obfuscated_indexers.extend(found_indexers_2)
+
     used_strings = []
     for indexer in obfuscated_indexers:
-        index = int(indexer.split("(")[1].split(")")[0])
-        string = strings[index]
-        used_strings.append(string)
-        actual_code = actual_code.replace(indexer, repr(string))
+        index = indexer.split("(")[1].split(")")[0]
+        if index:
+            index = int(index)
+            string = strings[index]
+            used_strings.append(string)
+            actual_code = actual_code.replace(indexer, repr(string))
 
     for string in used_strings:
-        return_value = re.compile(f"{property}\\.{string}=function\\(\\){{return (.*?)}}").findall(updated_decrypted)
+        return_value = re.compile(fr"{property}\.{string}=function\(\){{return (.*?)}}").findall(updated_decrypted)
         if len(return_value) > 0:
             return_value = return_value[0]
-            return_value_deobfuscated = str(simple_eval(return_value)) # or ast.literal_eval
+            return_value_deobfuscated = str(simple_eval(return_value))
             actual_code = re.sub(fr"{property}\['{string}'\]\(\)", return_value_deobfuscated, actual_code)
+
+    should_iterate = property_indirection_disabled
+    if len(sys.argv) >= 2:
+        should_iterate = \
+            should_iterate \
+            or sys.argv[1] == "PROPERTY_INDIRECTION_DISABLED"
     
-    print("[*] Nearly there, we just need to simplify it and...\n")
-    final_code = simplify(actual_code)
-    print(final_code)
-    unflatten(final_code)
+    if should_iterate:
+        for function in functions:
+            return_value = re.compile(fr"{property}\.{function}=function\(\){{return (.*?)}}").findall(updated_decrypted)
+            if len(return_value) > 0:
+                return_value = return_value[0]
+                return_value_deobfuscated = str(simple_eval(return_value))
+                actual_code = re.sub(fr"{property}.{function}\(\)", return_value_deobfuscated, actual_code)
+
+    print("[*] Nearly there, we just need to simplify and...\n")
+
+    print(simplify(actual_code))
+    unflatten(actual_code)
 
 deobfuscate("jsdefender.js")
