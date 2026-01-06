@@ -1,7 +1,6 @@
 import json
 import re
 import subprocess
-import sys
 
 try:
     import requests
@@ -232,8 +231,9 @@ for (const i in {property}) functions.push(i);
 
     actual_code = ")}();".join(code.split(")}();")[1:])
 
+    print("[*] Extracting obfuscated indexers...")
+
     obfuscated_indexers = []
-    property_indirection_disabled = False
     for function in functions:
         # With property indirection enabled
         found_indexers = re.compile(fr"{property}\.{function}\(\d+\)").findall(actual_code)
@@ -241,10 +241,9 @@ for (const i in {property}) functions.push(i);
 
         # With property indirection disabled
         found_indexers_2 = re.compile(fr"{property}\.{function}\(\)").findall(actual_code)
-        if len(found_indexers_2) >= len(found_indexers) and not property_indirection_disabled:
-            print("[!] Property indirection appears to have been disabled for this file.")
-            property_indirection_disabled = True
         obfuscated_indexers.extend(found_indexers_2)
+
+    print("[*] Replacing indexers with strings...")
 
     used_strings = []
     for indexer in obfuscated_indexers:
@@ -255,26 +254,37 @@ for (const i in {property}) functions.push(i);
             used_strings.append(string)
             actual_code = actual_code.replace(indexer, repr(string))
 
+    print("[*] Replacing obfuscated properties...")
+    _ = 0
     for string in used_strings:
         return_value = re.compile(fr"{property}\.{string}=function\(\){{return (.*?)}}").findall(updated_decrypted)
         if len(return_value) > 0:
+            _ = 1
             return_value = return_value[0]
             return_value_deobfuscated = str(simple_eval(return_value))
             actual_code = re.sub(fr"{property}\['{string}'\]\(\)", return_value_deobfuscated, actual_code)
-
-    should_iterate = property_indirection_disabled
-    if len(sys.argv) >= 2:
-        should_iterate = \
-            should_iterate \
-            or sys.argv[1] == "PROPERTY_INDIRECTION_DISABLED"
     
-    if should_iterate:
-        for function in functions:
-            return_value = re.compile(fr"{property}\.{function}=function\(\){{return (.*?)}}").findall(updated_decrypted)
-            if len(return_value) > 0:
-                return_value = return_value[0]
-                return_value_deobfuscated = str(simple_eval(return_value))
-                actual_code = re.sub(fr"{property}.{function}\(\)", return_value_deobfuscated, actual_code)
+    if not _:
+        print("[!] Property indirection may have been disabled for this file.")
+
+    property_indirection_disabled = False
+    for function in functions:
+        return_value = re.compile(fr"{property}\.{function}=function\(\){{return (.*?)}}").findall(updated_decrypted)
+        if len(return_value) > 0:
+            if not property_indirection_disabled:
+                if _:
+                    print("[!] Property indirection was disabled for this file.")
+                else:
+                    print("[!] The above was confirmed.")
+                property_indirection_disabled = True
+            _ = 1
+            return_value = return_value[0]
+            return_value_deobfuscated = str(simple_eval(return_value))
+            actual_code = re.sub(fr"{property}.{function}\(\)", return_value_deobfuscated, actual_code)
+
+    if not _:
+        print("[!] The obfuscation may have broken this deobfuscator, cannot proceed.")
+        return
 
     print("[*] Nearly there, we just need to simplify and...\n")
 
