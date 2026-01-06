@@ -263,20 +263,10 @@ for (const i in {property}) functions.push(i);
             return_value = return_value[0]
             return_value_deobfuscated = str(simple_eval(return_value))
             actual_code = re.sub(fr"{property}\['{string}'\]\(\)", return_value_deobfuscated, actual_code)
-    
-    if not _:
-        print("[!] Property indirection may have been disabled for this file.")
 
-    property_indirection_disabled = False
     for function in functions:
         return_value = re.compile(fr"{property}\.{function}=function\(\){{return (.*?)}}").findall(updated_decrypted)
         if len(return_value) > 0:
-            if not property_indirection_disabled:
-                if _:
-                    print("[!] Property indirection was disabled for this file.")
-                else:
-                    print("[!] The above was confirmed.")
-                property_indirection_disabled = True
             _ = 1
             return_value = return_value[0]
             return_value_deobfuscated = str(simple_eval(return_value))
@@ -288,7 +278,8 @@ for (const i in {property}) functions.push(i);
 
     print("[*] Nearly there, we just need to simplify and...\n")
 
-    print(simplify(actual_code))
+    actual_code = simplify(actual_code)
+    print(actual_code)
     unflatten(actual_code)
 
 deobfuscate("jsdefender.js")
