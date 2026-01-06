@@ -11,6 +11,39 @@ except ImportError:
     print("[!] Required: requests, getpass, simpleeval")
     exit()
 
+import re
+import base64
+
+def encode_tifinagh_sequences(text):
+    # 1. Define the Regex for the Tifinagh Unicode block (U+2D30 to U+2D7F)
+    # The '+' ensures we grab the whole sequence (word) at once.
+    tifinagh_pattern = r'[\u2D30-\u2D7F]+'
+
+    # 2. Define the replacement callback function
+    def replacer(match):
+        # Get the matched string
+        symbol_sequence = match.group(0)
+        
+        # Convert to bytes (UTF-8)
+        data_bytes = symbol_sequence.encode('utf-8')
+        
+        # Encode to URL-safe Base64
+        # (This uses '-' and '_' instead of '+' and '/')
+        encoded_bytes = base64.urlsafe_b64encode(data_bytes)
+        
+        # Decode back to string to insert into the result
+        final = "a" + encoded_bytes.decode('utf-8')
+        for i in range(0, 9):
+            final = final.replace(str(i), "ABCDEFGHIJ"[i])
+
+        return final.replace('-', '$')
+
+    # 3. Use re.sub to find and replace
+    result = re.sub(tifinagh_pattern, replacer, text)
+    if text != result:
+        print("[!] Warning: Tifinagh variable names detected. Variable names needed to be longer.")
+    return result
+
 def unflatten(js_code):
     OFFER = input("\n[*] Want to rename variables and unflatten the control flow? (yes/no) ")
     if OFFER.startswith("y"):
@@ -184,7 +217,7 @@ def deobfuscate(file):
     except KeyboardInterrupt:
         return
 
-    code = getFile(file)
+    code = encode_tifinagh_sequences(getFile(file))
     property = re.compile('let (.*?);').findall(code)[0]
     print("[*] Attempting to perform dynamic analysis for extracting second layer of obfuscated code...")
     result = executeJS('jsdefender-deobfuscate')
@@ -194,7 +227,7 @@ def deobfuscate(file):
         print(result.stderr)
         return
 
-    layer2 = result.stdout
+    layer2 = encode_tifinagh_sequences(result.stdout)
 
     found_instances = re.compile(r"function ([a-zA-Z]+)\([a-zA-Z]+\){return ([a-zA-Z]+)\[").findall(layer2)
     found_instances = [i[1] for i in found_instances]
@@ -212,7 +245,7 @@ globalThis['functions']=[];
 globalThis['stringArray']={extracted_string_var};
 for (const i in {property}) functions.push(i);
 }})()"""
-    stringVarGetter = ";console.log([stringArray,functions])"
+    stringVarGetter = ";console.log(JSON.stringify([stringArray,functions]))"
     updated_decrypted = layer2[:-3] + stringVarSetter + stringVarGetter
     with open("temp_jsdefender_strarr.js", "w") as f:
         f.write(updated_decrypted)
