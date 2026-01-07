@@ -6,6 +6,3 @@ A tool to deobfuscate files protected by [JSDefender](https://www.preemptive.com
 > - `python jsdefender-deobfuscate.py`
 > 
 > Node.js is required.
-
-> [!TIP]
-> In case the resulting deobfuscated file cannot be run without the obfuscated object with functions, try re-running with the argument `PROPERTY_INDIRECTION_DISABLED`.
