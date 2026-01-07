@@ -4,11 +4,12 @@ import subprocess
 
 try:
     import requests
+    import json5
     from getpass import getpass
     from simpleeval import simple_eval
 except ImportError:
     print("[!] Missing dependencies.")
-    print("[!] Required: requests, getpass, simpleeval")
+    print("[!] Required: requests, getpass, simpleeval, json5")
     exit()
 
 VARIABLE_NAME_REGEX = VNR = r"""[
@@ -87,7 +88,10 @@ Remember to include any simplified expressions directly in the script in place o
     
     print("[*] Successfully renamed variables and unflattened the control flow.\n")
     print(code)
-    
+
+def cleanup(js_code):
+    return re.sub(r'(?<![\'\"])\[[\'\"](.*?)[\'\"]\]\((.*?)\){', r'\1(\2){', js_code)
+
 def simplify(js_code):
     # A. MATH PATTERNS
     # Matches Hex, Octal, Decimal
@@ -220,11 +224,11 @@ for (const i in {property}) functions.push(i);
         print(result.stderr)
         return
 
-    stringArrayText = result.stdout.replace("'", '"')
-    stringArray = json.loads(stringArrayText)
+    stringArrayText = result.stdout
+    stringArray = json5.loads(stringArrayText)
 
-    strings = stringArray[0]
-    functions = stringArray[1]
+    strings = stringArray[0] # type: ignore
+    functions = stringArray[1] # type: ignore
 
     print("[*] Successfully extracted strings and variables!")
     print("[*] Extracting the actual code...")
@@ -234,7 +238,7 @@ for (const i in {property}) functions.push(i);
     print("[*] Extracting obfuscated indexers...")
 
     obfuscated_indexers = []
-    for function in functions:
+    for function in functions: # type: ignore
         # With property indirection enabled
         found_indexers = re.compile(fr"{property}\.{function}\(\d+\)").findall(actual_code)
         obfuscated_indexers.extend(found_indexers)
@@ -250,13 +254,14 @@ for (const i in {property}) functions.push(i);
         index = indexer.split("(")[1].split(")")[0]
         if index:
             index = int(index)
-            string = strings[index]
+            string = strings[index] # type: ignore
             used_strings.append(string)
             actual_code = actual_code.replace(indexer, repr(string))
 
     print("[*] Replacing obfuscated properties...")
     _ = 0
     for string in used_strings:
+        string = re.escape(string)
         return_value = re.compile(fr"{property}\.{string}=function\(\){{return (.*?)}}").findall(updated_decrypted)
         if len(return_value) > 0:
             _ = 1
@@ -264,7 +269,7 @@ for (const i in {property}) functions.push(i);
             return_value_deobfuscated = str(simple_eval(return_value))
             actual_code = re.sub(fr"{property}\['{string}'\]\(\)", return_value_deobfuscated, actual_code)
 
-    for function in functions:
+    for function in functions: # type: ignore
         return_value = re.compile(fr"{property}\.{function}=function\(\){{return (.*?)}}").findall(updated_decrypted)
         if len(return_value) > 0:
             _ = 1
@@ -278,7 +283,7 @@ for (const i in {property}) functions.push(i);
 
     print("[*] Nearly there, we just need to simplify and...\n")
 
-    actual_code = simplify(actual_code)
+    actual_code = cleanup(simplify(actual_code))
     print(actual_code)
     unflatten(actual_code)
 
